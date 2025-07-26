@@ -31,7 +31,7 @@ CODE_TO_NAME = {
     "247540": "EcoProBM",
 }
 
-DATA_FOLDER = "/home/hanmil/backtest_app"
+DATA_FOLDER = "stock"
 
 st.set_page_config(page_title="Stock Screening App", layout="wide")
 st.title("Stock Screening App")
