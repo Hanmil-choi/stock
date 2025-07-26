@@ -47,7 +47,7 @@ CODE_TO_NAME = {
 }
 
 
-DATA_FOLDER = "stock"
+DATA_FOLDER = os.path.dirname(__file__)  # 현재 디렉터리 기준
 st.set_page_config(page_title="Stock Screening App", layout="wide")
 st.title("Stock Screening App")
 
