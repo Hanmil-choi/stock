@@ -21,6 +21,7 @@ CODE_TO_NAME = {
     "000270": "Kia",
     "000660": "SK Hynix",
     "005380": "Hyundai Motor",
+    "005490": "POSCO",
     "005930": "Samsung Electronics",
     "010140": "Korean Air",
     "014620": "Taekyung",
