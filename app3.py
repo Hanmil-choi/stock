@@ -841,3 +841,110 @@ if st.button("Run Analysis"):
                     
             except Exception as e:
                 st.warning(f"Error calculating overall KODEX 200 comparison: {e}")
+
+
+st.write("---")
+st.write("## 📖 앱 사용법 가이드")
+
+with st.expander("🔍 **기본 설정 방법**", expanded=False):
+    st.write("""
+    ### 1. 백테스트 기간 설정
+    - **Start Date**: 백테스트 시작일 선택
+    - **End Date**: 백테스트 종료일 선택
+    - **Evaluation Cycle**: 재평가 주기 선택 (1주, 2주, 1개월, 3개월)
+    
+    ### 2. 종목 선택
+    - **Select Stocks**: 분석할 종목들을 선택
+    - **Available Features**: 선택한 종목의 사용 가능한 변수들 확인
+    """)
+
+with st.expander("📊 **Market Hold Condition 설정**", expanded=False):
+    st.write("""
+    ### Market Hold Condition (KODEX 200 기준)
+    - **Manual Input**: 직접 조건 입력 (예: kodex_close < kodex_sma20)
+    - **KODEX 200 하락장**: close < sma20
+    - **KODEX 200 급락장**: close < sma5
+    - **KODEX 200 보합장**: abs(close - sma20) < sma20 * 0.02
+    
+    ### 사용 가능한 KODEX 200 변수들
+    - kodex_close, kodex_open, kodex_high, kodex_low
+    - kodex_sma5, kodex_sma20, kodex_sma60
+    - kodex_rsi, kodex_macd, kodex_volume 등
+    """)
+
+with st.expander("⚙️ **Strategy Conditions 설정**", expanded=False):
+    st.write("""
+    ### 조건 설정 방법
+    1. **Number of Conditions**: 설정할 조건 개수 (1~10개)
+    2. **Condition 입력**: 각 조건을 텍스트로 입력
+    3. **Required 체크박스**: 필수 조건 여부 설정
+    
+    ### 조건 예시
+    - **기술적 지표**: sma20 > sma60, rsi < 30, volume > 1000000
+    - **가격 조건**: close > open, high > close * 1.02
+    - **복합 조건**: (sma20 > sma60) & (rsi < 70) & (volume > 500000)
+    
+    ### 조건 우선순위
+    - **필수 조건**: 모든 필수 조건을 만족해야 함
+    - **선택 조건**: 만족하는 선택 조건 개수로 우선순위 결정
+    """)
+
+with st.expander("🎯 **투자 설정**", expanded=False):
+    st.write("""
+    ### 투자 설정
+    1. **Max Number of Stocks to Hold**: 최대 보유 종목 수 (1~10개)
+    2. **Minimum Satisfied Conditions**: 보유하기 위한 최소 선택 조건 개수
+    
+    ### 투자 결정 로직
+    1. **필수 조건 확인**: 모든 필수 조건을 만족하는 종목만 후보
+    2. **선택 조건 카운트**: 만족하는 선택 조건 개수 계산
+    3. **우선순위 정렬**: 선택 조건 개수가 많은 순서대로 정렬
+    4. **최종 선택**: 최소 조건을 만족하는 종목들 중 상위 순서로 선택
+    """)
+
+with st.expander("📈 **결과 해석**", expanded=False):
+    st.write("""
+    ### 사이클별 결과
+    - **Held Stocks**: 실제 보유한 종목들의 수익률
+    - **All Stocks Performance**: 모든 후보 종목의 수익률 비교
+    - **KODEX 200 Comparison**: KODEX 200과의 사이클별 비교
+    
+    ### 전체 성과
+    - **Strategy Performance**: 전략의 전체 수익률 및 MDD
+    - **Equal Weight Performance**: 균등투자 전략과의 비교
+    - **KODEX 200 Comparison**: KODEX 200과의 전체 기간 비교
+    
+    ### 성과 지표
+    - **Total Return**: 전체 수익률
+    - **MDD (Maximum Drawdown)**: 최대 낙폭
+    - **Win Rate**: 승률 (수익 사이클 비율)
+    """)
+
+with st.expander("⚠️ **주의사항**", expanded=False):
+    st.write("""
+    ### 중요 사항
+    1. **미래 데이터 누락 방지**: 모든 조건은 이전 사이클 데이터로 평가
+    2. **거래세 적용**: 매도 시점에만 0.35% 거래세 적용
+    3. **데이터 가용성**: 선택한 기간에 데이터가 있는 종목만 분석
+    4. **조건 설정**: 올바른 변수명과 문법으로 조건 입력
+    
+    ### 팁
+    - **조건 테스트**: 간단한 조건부터 시작하여 점진적으로 복잡하게
+    - **성과 비교**: KODEX 200과의 비교로 전략 성과 평가
+    - **위험 관리**: MDD를 고려한 리스크 관리
+    """)
+
+with st.expander("🔧 **고급 기능**", expanded=False):
+    st.write("""
+    ### 고급 설정
+    1. **Market Hold Condition**: 시장 상황에 따른 투자 중단
+    2. **필수/선택 조건**: 조건의 중요도에 따른 분류
+    3. **최소 조건 설정**: 보유 기준의 엄격함 조절
+    4. **최대 보유 개수**: 포트폴리오 분산도 조절
+    
+    ### 성과 분석
+    - **사이클별 분석**: 각 재평가 시점의 성과 확인
+    - **종목별 분석**: 보유/미보유 종목의 수익률 비교
+    - **벤치마크 비교**: KODEX 200과의 성과 비교
+    """)
+
