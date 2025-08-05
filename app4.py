@@ -581,15 +581,16 @@ if st.button("Run Analysis"):
             cycle_details = []
             
             for i, rebalancing_date in enumerate(evaluation_dates):
-                # 사이클 기간 계산
-                if i == 0:
-                    cycle_start = start_date
+                # 사이클 시작/종료일 계산
+                cycle_start = rebalancing_date
+                if i < len(evaluation_dates) - 1:
+                    cycle_end = evaluation_dates[i+1]
                 else:
-                    cycle_start = evaluation_dates[i-1]
-                cycle_end = rebalancing_date
-                
+                    # 마지막 사이클: 데이터의 마지막 거래일
+                    cycle_end = trading_dates[-1]
+
                 st.markdown(f"### 리밸런싱 {i+1}: {cycle_start} ~ {cycle_end}")
-                
+
                 # 1. D-1까지의 데이터로 조건 평가
                 yesterday = rebalancing_date - dt.timedelta(days=1)
                 
@@ -658,21 +659,69 @@ if st.button("Run Analysis"):
                     st.info(f"💰 {rebalancing_date} : 조건을 만족하는 종목이 없어 현금 보유 (수익률 0%)")
                     held_stocks = []
                     stock_positions = {}
+                    cycle_return = 0.0
+                    equity_curve.append({"Cycle": f"리밸런싱 {i+1}", "Value": portfolio_value})
+                    cycle_returns.append(cycle_return)
+                    cycle_details.append({
+                        'cycle': i+1,
+                        'start_date': cycle_start,
+                        'end_date': cycle_end,
+                        'cash_holding': cash_holding,
+                        'held_stocks': held_stocks.copy(),
+                        'buy_summary': [],
+                        'sell_summary': [],
+                        'cycle_return': cycle_return,
+                        'portfolio_value': portfolio_value
+                    })
+                    continue
                 else:
                     cash_holding = False
                     st.write(f"📈 선택된 종목: {', '.join([CODE_TO_NAME.get(code, code) for code in buy_codes])}")
                     st.write(f"📊 조건 만족 개수: {max_conditions}개")
+
+                # 매수: cycle_start 시가로 매수
+                buy_summary = []
+                invest_per_stock = portfolio_value / len(buy_codes) if buy_codes else 0
+                for code in buy_codes:
+                    try:
+                        df = pd.read_csv(os.path.join(DATA_FOLDER, f"{code}_features.csv"))
+                        date_col = find_column(df, ['date', 'Date', '날짜'])
+                        open_col = find_column(df, ['open', 'Open', '시가'])
+                        df[date_col] = pd.to_datetime(df[date_col])
+                        df_buy = df[df[date_col] == pd.to_datetime(cycle_start)]
+                        if len(df_buy) > 0:
+                            open_price = df_buy.iloc[0][open_col]
+                            shares = invest_per_stock / open_price if open_price > 0 else 0
+                            buy_summary.append({
+                                "Code": code,
+                                "Name": CODE_TO_NAME.get(code, code),
+                                "Buy Date": cycle_start,
+                                "Buy Price": f"{open_price:,.0f}",
+                                "Shares": f"{shares:.2f}",
+                                "Investment": f"{invest_per_stock:,.0f}"
+                            })
+                            # 포트폴리오에 추가
+                            held_stocks.append(code)
+                            stock_positions[code] = {
+                                'buy_price': open_price,
+                                'buy_date': cycle_start,
+                                'shares': shares
+                            }
+                    except Exception as e:
+                        st.warning(f"Error buying {code}: {e}")
+
+                # 매도 조건 체크 및 매도 실행
+                sell_summary = []
+                total_buy = 0
+                total_sell = 0
                 
-                # 6. 보유 기간 중 매도 조건 체크 (현재 사이클 내에서)
-                sell_candidates = []
-                sell_details = []  # 매도 상세 정보 저장
-                
-                # 현재 사이클 기간 내의 모든 거래일에서 매도 조건 체크
+                # 사이클 내 모든 거래일에서 매도 조건 체크
                 cycle_trading_dates = [d for d in trading_dates if cycle_start <= d < cycle_end]
+                sold_codes = set()  # 이미 매도된 종목들
                 
                 for check_date in cycle_trading_dates:
                     for code in held_stocks[:]:  # 복사본으로 순회
-                        if code in sell_candidates:  # 이미 매도 대상이면 건너뛰기
+                        if code in sold_codes:  # 이미 매도된 종목이면 건너뛰기
                             continue
                             
                         try:
@@ -696,36 +745,54 @@ if st.button("Run Analysis"):
                             if take_profit_pct > 0 and buy_price > 0:
                                 profit_pct = ((current_close - buy_price) / buy_price) * 100
                                 if profit_pct >= take_profit_pct:
-                                    sell_candidates.append(code)
+                                    sold_codes.add(code)
                                     sell_price = current_close * (1 - 0.0035)  # 수수료 적용
                                     profit_amount = (sell_price - buy_price) * shares
-                                    sell_details.append({
-                                        'code': code,
-                                        'name': CODE_TO_NAME.get(code, code),
-                                        'sell_date': check_date,
-                                        'sell_price': sell_price,
-                                        'profit_pct': profit_pct,
-                                        'profit_amount': profit_amount,
-                                        'reason': '익절'
+                                    sell_summary.append({
+                                        "Code": code,
+                                        "Name": CODE_TO_NAME.get(code, code),
+                                        "Buy Date": position.get('buy_date', 'N/A'),
+                                        "Buy Price": f"{buy_price:,.0f}",
+                                        "Shares": f"{shares:.2f}",
+                                        "Sell Date": check_date,
+                                        "Sell Price": f"{sell_price:,.0f}",
+                                        "Profit %": f"{profit_pct:+.2f}",
+                                        "Profit Amount": f"{profit_amount:,.0f}",
+                                        "Reason": "익절"
                                     })
+                                    total_buy += buy_price * shares
+                                    total_sell += sell_price * shares
+                                    # 포트폴리오에서 제거
+                                    held_stocks.remove(code)
+                                    if code in stock_positions:
+                                        del stock_positions[code]
                                     continue
                             
                             # 최대 손절 체크
                             if max_loss_pct > 0 and buy_price > 0:
                                 loss_pct = ((buy_price - current_close) / buy_price) * 100
                                 if loss_pct >= max_loss_pct:
-                                    sell_candidates.append(code)
+                                    sold_codes.add(code)
                                     sell_price = current_close * (1 - 0.0035)  # 수수료 적용
                                     loss_amount = (sell_price - buy_price) * shares
-                                    sell_details.append({
-                                        'code': code,
-                                        'name': CODE_TO_NAME.get(code, code),
-                                        'sell_date': check_date,
-                                        'sell_price': sell_price,
-                                        'profit_pct': -loss_pct,
-                                        'profit_amount': loss_amount,
-                                        'reason': '최대 손절'
+                                    sell_summary.append({
+                                        "Code": code,
+                                        "Name": CODE_TO_NAME.get(code, code),
+                                        "Buy Date": position.get('buy_date', 'N/A'),
+                                        "Buy Price": f"{buy_price:,.0f}",
+                                        "Shares": f"{shares:.2f}",
+                                        "Sell Date": check_date,
+                                        "Sell Price": f"{sell_price:,.0f}",
+                                        "Profit %": f"{-loss_pct:+.2f}",
+                                        "Profit Amount": f"{loss_amount:,.0f}",
+                                        "Reason": "최대 손절"
                                     })
+                                    total_buy += buy_price * shares
+                                    total_sell += sell_price * shares
+                                    # 포트폴리오에서 제거
+                                    held_stocks.remove(code)
+                                    if code in stock_positions:
+                                        del stock_positions[code]
                                     continue
                             
                             # 트레일링 손절 체크
@@ -738,19 +805,28 @@ if st.button("Run Analysis"):
                                 # 트레일링 손절 체크
                                 drop_from_high = ((highest_price - current_close) / highest_price) * 100
                                 if drop_from_high >= trailing_stop_pct:
-                                    sell_candidates.append(code)
+                                    sold_codes.add(code)
                                     sell_price = current_close * (1 - 0.0035)  # 수수료 적용
                                     profit_pct = ((sell_price - buy_price) / buy_price) * 100
                                     profit_amount = (sell_price - buy_price) * shares
-                                    sell_details.append({
-                                        'code': code,
-                                        'name': CODE_TO_NAME.get(code, code),
-                                        'sell_date': check_date,
-                                        'sell_price': sell_price,
-                                        'profit_pct': profit_pct,
-                                        'profit_amount': profit_amount,
-                                        'reason': '트레일링 손절'
+                                    sell_summary.append({
+                                        "Code": code,
+                                        "Name": CODE_TO_NAME.get(code, code),
+                                        "Buy Date": position.get('buy_date', 'N/A'),
+                                        "Buy Price": f"{buy_price:,.0f}",
+                                        "Shares": f"{shares:.2f}",
+                                        "Sell Date": check_date,
+                                        "Sell Price": f"{sell_price:,.0f}",
+                                        "Profit %": f"{profit_pct:+.2f}",
+                                        "Profit Amount": f"{profit_amount:,.0f}",
+                                        "Reason": "트레일링 손절"
                                     })
+                                    total_buy += buy_price * shares
+                                    total_sell += sell_price * shares
+                                    # 포트폴리오에서 제거
+                                    held_stocks.remove(code)
+                                    if code in stock_positions:
+                                        del stock_positions[code]
                                     continue
                             
                             # 보유 기간 중 매도 조건 체크
@@ -774,247 +850,143 @@ if st.button("Run Analysis"):
                                                 sell_required_satisfied = False
                                                 break
                                     
-                                    # 매도 조건 만족 시 매도
+                                    # 매도 조건 만족 시 매도 (다음날 시가로 매도)
                                     if sell_required_satisfied and sell_conditions_satisfied >= min_satisfied_sell_conditions:
-                                        sell_candidates.append(code)
-                                        sell_price = current_close * (1 - 0.0035)  # 수수료 적용
-                                        profit_pct = ((sell_price - buy_price) / buy_price) * 100
-                                        profit_amount = (sell_price - buy_price) * shares
-                                        sell_details.append({
-                                            'code': code,
-                                            'name': CODE_TO_NAME.get(code, code),
-                                            'sell_date': check_date,
-                                            'sell_price': sell_price,
-                                            'profit_pct': profit_pct,
-                                            'profit_amount': profit_amount,
-                                            'reason': '매도 조건 만족'
-                                        })
-                                        continue
+                                        # 다음 거래일 찾기
+                                        next_trading_day = None
+                                        for trading_date in trading_dates:
+                                            if trading_date > check_date:
+                                                next_trading_day = trading_date
+                                                break
+                                        
+                                        if next_trading_day:
+                                            # 다음날 시가로 매도
+                                            df_next = df[df[date_col] == pd.to_datetime(next_trading_day)]
+                                            if len(df_next) > 0:
+                                                open_col = find_column(df, ['open', 'Open', '시가'])
+                                                next_open = df_next.iloc[0][open_col]
+                                                sell_price = next_open * (1 - 0.0035)  # 수수료 적용
+                                                profit_pct = ((sell_price - buy_price) / buy_price) * 100
+                                                profit_amount = (sell_price - buy_price) * shares
+                                                sell_summary.append({
+                                                    "Code": code,
+                                                    "Name": CODE_TO_NAME.get(code, code),
+                                                    "Buy Date": position.get('buy_date', 'N/A'),
+                                                    "Buy Price": f"{buy_price:,.0f}",
+                                                    "Shares": f"{shares:.2f}",
+                                                    "Sell Date": next_trading_day,
+                                                    "Sell Price": f"{sell_price:,.0f}",
+                                                    "Profit %": f"{profit_pct:+.2f}",
+                                                    "Profit Amount": f"{profit_amount:,.0f}",
+                                                    "Reason": "매도 조건 만족"
+                                                })
+                                                total_buy += buy_price * shares
+                                                total_sell += sell_price * shares
+                                                # 포트폴리오에서 제거
+                                                held_stocks.remove(code)
+                                                if code in stock_positions:
+                                                    del stock_positions[code]
+                                                sold_codes.add(code)
+                                                continue
                                         
                         except Exception as e:
                             st.warning(f"Error checking sell conditions for {code}: {e}")
                 
-                # 7. 매도 상세 정보 표시
-                if sell_details:
-                    st.write("**📊 매도 상세 정보**")
-                    sell_df = pd.DataFrame(sell_details)
-                    sell_df['sell_date'] = pd.to_datetime(sell_df['sell_date']).dt.strftime('%Y-%m-%d')
-                    sell_df['sell_price'] = sell_df['sell_price'].round(0).astype(int)
-                    sell_df['profit_amount'] = sell_df['profit_amount'].round(0).astype(int)
-                    sell_df['profit_pct'] = sell_df['profit_pct'].round(2)
-                    sell_df = sell_df.rename(columns={
-                        'code': 'Code',
-                        'name': 'Name', 
-                        'sell_date': 'Sell Date',
-                        'sell_price': 'Sell Price',
-                        'profit_pct': 'Profit %',
-                        'profit_amount': 'Profit Amount',
-                        'reason': 'Reason'
-                    })
-                    st.dataframe(sell_df)
-                
-                # 8. 리밸런싱일 시가로 매수/매도
-                cycle_summary = []
-                buy_summary = []  # 매수 상세 정보
-                sell_summary = []  # 매도 상세 정보
-                
-                # 매도 실행 (기존 보유 종목들)
-                for code in held_stocks[:]:  # 복사본으로 순회
-                    if code not in buy_codes or code in sell_candidates:  # 새로운 보유 대상에 없거나 매도 조건 만족
-                        try:
-                            df = pd.read_csv(os.path.join(DATA_FOLDER, f"{code}_features.csv"))
-                            date_col = find_column(df, ['date', 'Date', '날짜'])
-                            open_col = find_column(df, ['open', 'Open', '시가'])
-                            df[date_col] = pd.to_datetime(df[date_col])
-                            
-                            # 리밸런싱일 시가
-                            df_rebalancing = df[df[date_col] == pd.to_datetime(rebalancing_date)]
-                            if len(df_rebalancing) > 0:
-                                open_price = df_rebalancing.iloc[0][open_col]
-                                position = stock_positions.get(code, {})
-                                buy_price = position.get('buy_price', 0)
-                                shares = position.get('shares', 0)
-                                
-                                if not cash_holding:
-                                    # 매도 시 0.35% 수수료 차감
-                                    sell_price = open_price * (1 - 0.0035)
-                                    # 수익률 계산
-                                    if buy_price > 0:
-                                        profit_pct = ((sell_price - buy_price) / buy_price) * 100
-                                        profit_amount = (sell_price - buy_price) * shares
-                                    else:
-                                        profit_pct = 0
-                                        profit_amount = 0
-                                else:
-                                    # 현금 보유로 전환 시 수수료 없음
-                                    sell_price = open_price
-                                    profit_pct = 0
-                                    profit_amount = 0
-                                
-                                sell_summary.append({
-                                    "Code": code,
-                                    "Name": CODE_TO_NAME.get(code, code),
-                                    "Buy Date": position.get('buy_date', 'N/A'),
-                                    "Buy Price": f"{buy_price:,.0f}",
-                                    "Shares": f"{shares:.2f}",
-                                    "Sell Date": rebalancing_date,
-                                    "Sell Price": f"{sell_price:,.0f}",
-                                    "Profit %": f"{profit_pct:+.2f}",
-                                    "Profit Amount": f"{profit_amount:,.0f}",
-                                    "Reason": "조건 만족 개수 부족" if code not in buy_codes else "매도 조건 만족"
-                                })
-                                
-                                # 포트폴리오에서 제거
-                                if code in held_stocks:
-                                    held_stocks.remove(code)
-                                if code in stock_positions:
-                                    del stock_positions[code]
-                        except Exception as e:
-                            st.warning(f"Error selling {code}: {e}")
-                
-                # 매수 실행 (새로운 종목들)
-                if buy_codes and not cash_holding:
-                    # 현재 포트폴리오 가치를 사용하여 투자 (수익금 포함)
-                    # 첫 번째 사이클이면 초기 투자금, 아니면 현재 보유 종목들의 가치 합계 사용
-                    if i == 0:
-                        available_funds = initial_value
-                    else:
-                        # 현재 보유 종목들의 가치 계산
-                        available_funds = 0
-                        for code in held_stocks:
-                            try:
-                                df = pd.read_csv(os.path.join(DATA_FOLDER, f"{code}_features.csv"))
-                                date_col = find_column(df, ['date', 'Date', '날짜'])
-                                open_col = find_column(df, ['open', 'Open', '시가'])
-                                df[date_col] = pd.to_datetime(df[date_col])
-                                
-                                # 리밸런싱일 시가로 현재 가치 계산
-                                df_rebalancing = df[df[date_col] == pd.to_datetime(rebalancing_date)]
-                                if len(df_rebalancing) > 0:
-                                    current_price = df_rebalancing.iloc[0][open_col]
-                                    position = stock_positions.get(code, {})
-                                    shares = position.get('shares', 0)
-                                    available_funds += shares * current_price
-                            except Exception as e:
-                                st.warning(f"Error calculating value for {code}: {e}")
-                    
-                    invest_per_stock = available_funds / len(buy_codes)
-                    
-                    for code in buy_codes:
-                        if code not in held_stocks:
-                            try:
-                                df = pd.read_csv(os.path.join(DATA_FOLDER, f"{code}_features.csv"))
-                                date_col = find_column(df, ['date', 'Date', '날짜'])
-                                open_col = find_column(df, ['open', 'Open', '시가'])
-                                df[date_col] = pd.to_datetime(df[date_col])
-                                
-                                # 리밸런싱일 시가
-                                df_rebalancing = df[df[date_col] == pd.to_datetime(rebalancing_date)]
-                                if len(df_rebalancing) > 0:
-                                    open_price = df_rebalancing.iloc[0][open_col]
-                                    buy_price = open_price  # 매수 시 수수료 없음
-                                    
-                                    shares = invest_per_stock / buy_price
-                                    actual_investment = shares * buy_price
-                                    
-                                    buy_summary.append({
-                                        "Code": code,
-                                        "Name": CODE_TO_NAME.get(code, code),
-                                        "Buy Date": rebalancing_date,
-                                        "Buy Price": f"{buy_price:,.0f}",
-                                        "Shares": f"{shares:.2f}",
-                                        "Investment": f"{actual_investment:,.0f}"
-                                    })
-                                    
-                                    # 포트폴리오에 추가
-                                    held_stocks.append(code)
-                                    stock_positions[code] = {
-                                        'buy_price': buy_price,
-                                        'highest_price': buy_price,
-                                        'buy_date': rebalancing_date,
-                                        'shares': shares
-                                    }
-                            except Exception as e:
-                                st.warning(f"Error buying {code}: {e}")
-                
-                # 9. 포트폴리오 가치 업데이트 및 사이클 수익률 계산
-                
-                # 매수/매도 내역 표시
-                if buy_summary:
-                    st.write("**📈 매수 내역**")
-                    buy_df = pd.DataFrame(buy_summary)
-                    st.dataframe(buy_df)
-                
-                if sell_summary:
-                    st.write("**📉 매도 내역**")
-                    sell_df = pd.DataFrame(sell_summary)
-                    st.dataframe(sell_df)
-                
-                # 현재 보유 종목 표시
-                if held_stocks:
-                    st.write(f"**현재 보유 종목**: {', '.join([CODE_TO_NAME.get(code, code) for code in held_stocks])}")
-                else:
-                    st.write("**현재 보유 종목**: 없음")
-                
-                # 포트폴리오 가치 계산
-                current_portfolio_value = 0
-                if held_stocks and not cash_holding:
-                    for code in held_stocks:
-                        try:
-                            df = pd.read_csv(os.path.join(DATA_FOLDER, f"{code}_features.csv"))
-                            date_col = find_column(df, ['date', 'Date', '날짜'])
-                            open_col = find_column(df, ['open', 'Open', '시가'])
-                            df[date_col] = pd.to_datetime(df[date_col])
-                            
-                            # 리밸런싱일 시가로 현재 가치 계산
-                            df_rebalancing = df[df[date_col] == pd.to_datetime(rebalancing_date)]
-                            if len(df_rebalancing) > 0:
-                                current_price = df_rebalancing.iloc[0][open_col]
-                                position = stock_positions.get(code, {})
-                                shares = position.get('shares', 0)
-                                current_portfolio_value += shares * current_price
-                        except Exception as e:
-                            st.warning(f"Error calculating value for {code}: {e}")
-                else:
-                    # 현금보유 시: 첫 번째 사이클이면 초기 투자금, 아니면 기존 가치 유지
-                    current_portfolio_value = initial_value if i == 0 else portfolio_value
-                
-                portfolio_value = current_portfolio_value
+                # 리밸런싱일 시가로 남은 종목들 매도
+                for code in held_stocks[:]:
+                    try:
+                        df = pd.read_csv(os.path.join(DATA_FOLDER, f"{code}_features.csv"))
+                        date_col = find_column(df, ['date', 'Date', '날짜'])
+                        open_col = find_column(df, ['open', 'Open', '시가'])
+                        df[date_col] = pd.to_datetime(df[date_col])
+                        df_sell = df[df[date_col] == pd.to_datetime(cycle_end)]
+                        if len(df_sell) > 0:
+                            open_price = df_sell.iloc[0][open_col]
+                            sell_price = open_price * (1 - 0.0035)
+                            position = stock_positions.get(code, {})
+                            buy_price = position.get('buy_price', 0)
+                            shares = position.get('shares', 0)
+                            profit_pct = ((sell_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
+                            profit_amount = (sell_price - buy_price) * shares
+                            sell_summary.append({
+                                "Code": code,
+                                "Name": CODE_TO_NAME.get(code, code),
+                                "Buy Date": position.get('buy_date', 'N/A'),
+                                "Buy Price": f"{buy_price:,.0f}",
+                                "Shares": f"{shares:.2f}",
+                                "Sell Date": cycle_end,
+                                "Sell Price": f"{sell_price:,.0f}",
+                                "Profit %": f"{profit_pct:+.2f}",
+                                "Profit Amount": f"{profit_amount:,.0f}",
+                                "Reason": "리밸런싱 매도"
+                            })
+                            total_buy += buy_price * shares
+                            total_sell += sell_price * shares
+                            # 포트폴리오에서 제거
+                            held_stocks.remove(code)
+                            if code in stock_positions:
+                                del stock_positions[code]
+                    except Exception as e:
+                        st.warning(f"Error selling {code}: {e}")
+
+                # 수익률 계산
+                cycle_return = ((total_sell - total_buy) / total_buy) * 100 if total_buy > 0 else 0
+                portfolio_value = total_sell
                 equity_curve.append({"Cycle": f"리밸런싱 {i+1}", "Value": portfolio_value})
-                
-                # 정확한 사이클 수익률 계산
-                if i == 0:
-                    # 첫 번째 사이클: 초기 투자금 대비 수익률
-                    if initial_value > 0:
-                        cycle_return = ((portfolio_value - initial_value) / initial_value) * 100
-                    else:
-                        cycle_return = 0.0
-                else:
-                    # 이전 사이클 종료 시점의 포트폴리오 가치 계산
-                    prev_portfolio_value = equity_curve[i-1]["Value"]
-                    
-                    # 0으로 나누기 방지
-                    if prev_portfolio_value > 0:
-                        cycle_return = ((portfolio_value - prev_portfolio_value) / prev_portfolio_value) * 100
-                    else:
-                        cycle_return = 0.0
-                
                 cycle_returns.append(cycle_return)
-                
+
+                # 결과 표시 및 저장
+                if buy_summary or sell_summary:
+                    st.write("**📊 거래 내역**")
+                    
+                    # 매수/매도 내역을 하나의 표로 통합
+                    combined_summary = []
+                    
+                    # 매수 내역 추가
+                    for buy_item in buy_summary:
+                        combined_summary.append({
+                            "Code": buy_item["Code"],
+                            "Name": buy_item["Name"],
+                            "Action": "매수",
+                            "Date": buy_item["Buy Date"],
+                            "Price": buy_item["Buy Price"],
+                            "Shares": buy_item["Shares"],
+                            "Investment": buy_item["Investment"],
+                            "Profit %": "-",
+                            "Profit Amount": "-",
+                            "Reason": "매수"
+                        })
+                    
+                    # 매도 내역 추가
+                    for sell_item in sell_summary:
+                        combined_summary.append({
+                            "Code": sell_item["Code"],
+                            "Name": sell_item["Name"],
+                            "Action": "매도",
+                            "Date": sell_item["Sell Date"],
+                            "Price": sell_item["Sell Price"],
+                            "Shares": sell_item["Shares"],
+                            "Investment": sell_item["Buy Price"],
+                            "Profit %": sell_item["Profit %"],
+                            "Profit Amount": sell_item["Profit Amount"],
+                            "Reason": sell_item["Reason"]
+                        })
+                    
+                    if combined_summary:
+                        combined_df = pd.DataFrame(combined_summary)
+                        st.dataframe(combined_df, use_container_width=True)
                 st.write(f"**포트폴리오 가치**: {int(portfolio_value):,}원")
                 st.write(f"**사이클 수익률**: {cycle_return:+.2f}%")
-                
-                # 사이클 상세 정보 저장
                 cycle_details.append({
                     'cycle': i+1,
                     'start_date': cycle_start,
                     'end_date': cycle_end,
-                    'held_stocks': held_stocks.copy(),
                     'cash_holding': cash_holding,
+                    'held_stocks': held_stocks.copy(),
+                    'buy_summary': buy_summary,
+                    'sell_summary': sell_summary,
                     'cycle_return': cycle_return,
-                    'portfolio_value': portfolio_value,
-                    'buy_summary': buy_summary.copy() if 'buy_summary' in locals() else [],
-                    'sell_summary': sell_summary.copy() if 'sell_summary' in locals() else []
+                    'portfolio_value': portfolio_value
                 })
             
             # 최종 결과
@@ -1040,16 +1012,46 @@ if st.button("Run Analysis"):
                         st.write(f"- 수익률: {detail['cycle_return']:+.2f}%")
                     st.write(f"- 포트폴리오 가치: {int(detail['portfolio_value']):,}원")
                     
-                    # 매수/매도 내역 표시
-                    if detail['buy_summary']:
-                        st.write("  📈 매수 내역:")
-                        buy_df = pd.DataFrame(detail['buy_summary'])
-                        st.dataframe(buy_df, use_container_width=True)
-                    
-                    if detail['sell_summary']:
-                        st.write("  📉 매도 내역:")
-                        sell_df = pd.DataFrame(detail['sell_summary'])
-                        st.dataframe(sell_df, use_container_width=True)
+                    # 매수/매도 내역 표시 (통합 표)
+                    if detail['buy_summary'] or detail['sell_summary']:
+                        st.write("  📊 거래 내역:")
+                        
+                        # 매수/매도 내역을 하나의 표로 통합
+                        combined_summary = []
+                        
+                        # 매수 내역 추가
+                        for buy_item in detail['buy_summary']:
+                            combined_summary.append({
+                                "Code": buy_item["Code"],
+                                "Name": buy_item["Name"],
+                                "Action": "매수",
+                                "Date": buy_item["Buy Date"],
+                                "Price": buy_item["Buy Price"],
+                                "Shares": buy_item["Shares"],
+                                "Investment": buy_item["Investment"],
+                                "Profit %": "-",
+                                "Profit Amount": "-",
+                                "Reason": "매수"
+                            })
+                        
+                        # 매도 내역 추가
+                        for sell_item in detail['sell_summary']:
+                            combined_summary.append({
+                                "Code": sell_item["Code"],
+                                "Name": sell_item["Name"],
+                                "Action": "매도",
+                                "Date": sell_item["Sell Date"],
+                                "Price": sell_item["Sell Price"],
+                                "Shares": sell_item["Shares"],
+                                "Investment": sell_item["Buy Price"],
+                                "Profit %": sell_item["Profit %"],
+                                "Profit Amount": sell_item["Profit Amount"],
+                                "Reason": sell_item["Reason"]
+                            })
+                        
+                        if combined_summary:
+                            combined_df = pd.DataFrame(combined_summary)
+                            st.dataframe(combined_df, use_container_width=True)
                     
                     st.write("---")
             
@@ -1184,17 +1186,42 @@ if st.button("Run Analysis"):
             kodex_final = kodex_equity[-1] if kodex_equity else initial_value
             equal_final = equal_equity[-1] if equal_equity else initial_value
 
+            # Max Drawdown 계산 함수
+            def calculate_max_drawdown(equity_values):
+                if not equity_values or len(equity_values) < 2:
+                    return 0.0
+                
+                peak = equity_values[0]
+                max_drawdown = 0.0
+                
+                for value in equity_values:
+                    if value > peak:
+                        peak = value
+                    drawdown = (peak - value) / peak * 100
+                    if drawdown > max_drawdown:
+                        max_drawdown = drawdown
+                
+                return max_drawdown
+
+            # 각 전략의 Max Drawdown 계산
+            my_strategy_values = [item["Value"] for item in equity_curve]
+            kodex_max_dd = calculate_max_drawdown(kodex_equity)
+            equal_max_dd = calculate_max_drawdown(equal_equity)
+            my_strategy_max_dd = calculate_max_drawdown(my_strategy_values)
+
             # Summary Statistics
             summary = pd.DataFrame({
                 'Final Value': [int(my_strategy_final), int(kodex_final), int(equal_final)],
                 'Total Return (%)': [((my_strategy_final/initial_value)-1)*100, ((kodex_final/initial_value)-1)*100, ((equal_final/initial_value)-1)*100],
-                'Average Cycle Return (%)': [np.mean(cycle_returns) if cycle_returns else 0, np.mean(kodex_cycle_returns) if kodex_cycle_returns else 0, np.mean(equal_cycle_returns) if equal_cycle_returns else 0]
+                'Average Cycle Return (%)': [np.mean(cycle_returns) if cycle_returns else 0, np.mean(kodex_cycle_returns) if kodex_cycle_returns else 0, np.mean(equal_cycle_returns) if equal_cycle_returns else 0],
+                'Max Drawdown (%)': [my_strategy_max_dd, kodex_max_dd, equal_max_dd]
             }, index=['My Strategy','KODEX 200','Equal Weight'])
 
             # 수치 포맷팅 적용
             summary['Final Value'] = summary['Final Value'].apply(lambda x: f"{x:,}")
             summary['Total Return (%)'] = summary['Total Return (%)'].round(2)
             summary['Average Cycle Return (%)'] = summary['Average Cycle Return (%)'].round(2)
+            summary['Max Drawdown (%)'] = summary['Max Drawdown (%)'].round(2)
 
             st.write("#### Strategy Summary Statistics")
             st.dataframe(summary)
