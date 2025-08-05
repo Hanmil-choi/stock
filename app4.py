@@ -586,79 +586,143 @@ if st.button("Run Analysis"):
                 if i < len(evaluation_dates) - 1:
                     cycle_end = evaluation_dates[i+1]
                 else:
-                    # 마지막 사이클: 데이터의 마지막 거래일
-                    cycle_end = trading_dates[-1]
+                    # 마지막 사이클: 선택된 종료일까지만
+                    cycle_end = end_date
 
                 st.markdown(f"### 리밸런싱 {i+1}: {cycle_start} ~ {cycle_end}")
 
-                # 1. D-1까지의 데이터로 조건 평가
-                yesterday = rebalancing_date - dt.timedelta(days=1)
+                # 매수 실행 (매일 조건 재평가)
+                buy_summary = []
+                cash_holding = True
+                buy_executed = False
                 
-                # 2. 각 종목별 조건 만족 개수 계산 (app3 스타일)
-                stock_condition_counts = []
+                # 사이클 내 모든 거래일에서 매수 조건 체크
+                cycle_trading_dates = [d for d in trading_dates if cycle_start <= d < cycle_end]
                 
-                for code in selected_codes:
-                    try:
-                        df = pd.read_csv(os.path.join(DATA_FOLDER, f"{code}_features.csv"))
-                        date_col = find_column(df, ['date', 'Date', '날짜'])
-                        df[date_col] = pd.to_datetime(df[date_col])
+                for check_date in cycle_trading_dates:
+                    if buy_executed:  # 이미 매수했으면 더 이상 체크하지 않음
+                        break
                         
-                        # D-1까지의 데이터로 조건 평가
-                        df_until_yesterday = df[df[date_col] <= pd.to_datetime(yesterday)].copy()
-                        if len(df_until_yesterday) > 0:
-                            # 조건 평가
-                            conditions_satisfied = 0
-                            required_satisfied = True
+                    # 해당 날짜까지의 데이터로 조건 평가
+                    yesterday = check_date - dt.timedelta(days=1)
+                    
+                    # 각 종목별 조건 만족 개수 계산
+                    stock_condition_counts = []
+                    
+                    for code in selected_codes:
+                        try:
+                            df = pd.read_csv(os.path.join(DATA_FOLDER, f"{code}_features.csv"))
+                            date_col = find_column(df, ['date', 'Date', '날짜'])
+                            df[date_col] = pd.to_datetime(df[date_col])
                             
-                            for cond, req in zip(conditions, required_flags):
-                                try:
-                                    if req:  # 필수 조건
-                                        if len(df_until_yesterday.query(cond)) == 0:
+                            # D-1까지의 데이터로 조건 평가
+                            df_until_yesterday = df[df[date_col] <= pd.to_datetime(yesterday)].copy()
+                            if len(df_until_yesterday) > 0:
+                                # 조건 평가
+                                conditions_satisfied = 0
+                                required_satisfied = True
+                                
+                                for cond, req in zip(conditions, required_flags):
+                                    try:
+                                        if req:  # 필수 조건
+                                            if len(df_until_yesterday.query(cond)) == 0:
+                                                required_satisfied = False
+                                                break
+                                        else:  # 선택 조건
+                                            if len(df_until_yesterday.query(cond)) > 0:
+                                                conditions_satisfied += 1
+                                    except Exception:
+                                        if req:
                                             required_satisfied = False
                                             break
-                                    else:  # 선택 조건
-                                        if len(df_until_yesterday.query(cond)) > 0:
-                                            conditions_satisfied += 1
-                                except Exception:
-                                    if req:
-                                        required_satisfied = False
-                                        break
-                            
-                            # 조건을 만족하면 후보에 추가
-                            if required_satisfied and conditions_satisfied >= min_satisfied_conditions:
-                                stock_condition_counts.append({
-                                    'code': code,
-                                    'name': CODE_TO_NAME.get(code, code),
-                                    'conditions_satisfied': conditions_satisfied,
-                                    'required_satisfied': required_satisfied
-                                })
-                    except Exception as e:
-                        st.warning(f"Error evaluating {code}: {e}")
-                
-                # 3. 조건 만족 개수 순으로 정렬 (app3 스타일)
-                stock_condition_counts.sort(key=lambda x: x['conditions_satisfied'], reverse=True)
-                
-                # 4. 보유 종목 선정 (app3 스타일)
-                buy_codes = []
-                if stock_condition_counts:
-                    max_conditions = stock_condition_counts[0]['conditions_satisfied']
-                    # 가장 많이 만족한 종목들만 선택
-                    top_stocks = [stock for stock in stock_condition_counts 
-                                 if stock['conditions_satisfied'] == max_conditions]
+                                
+                                # 조건을 만족하면 후보에 추가
+                                if required_satisfied and conditions_satisfied >= min_satisfied_conditions:
+                                    stock_condition_counts.append({
+                                        'code': code,
+                                        'name': CODE_TO_NAME.get(code, code),
+                                        'conditions_satisfied': conditions_satisfied,
+                                        'required_satisfied': required_satisfied
+                                    })
+                        except Exception as e:
+                            st.warning(f"Error evaluating {code}: {e}")
                     
-                    if len(top_stocks) <= max_stock_count:
-                        buy_codes = [stock['code'] for stock in top_stocks]
+                    # 조건 만족 개수 순으로 정렬
+                    stock_condition_counts.sort(key=lambda x: x['conditions_satisfied'], reverse=True)
+                    
+                    # 보유 종목 선정
+                    buy_codes = []
+                    if stock_condition_counts:
+                        max_conditions = stock_condition_counts[0]['conditions_satisfied']
+                        # 가장 많이 만족한 종목들만 선택
+                        top_stocks = [stock for stock in stock_condition_counts 
+                                     if stock['conditions_satisfied'] == max_conditions]
+                        
+                        if len(top_stocks) <= max_stock_count:
+                            buy_codes = [stock['code'] for stock in top_stocks]
+                        else:
+                            # max_stock_count보다 많으면 랜덤 선택
+                            import random
+                            buy_codes = [stock['code'] for stock in random.sample(top_stocks, max_stock_count)]
+                    
+                    # 매수 실행 (다음날 시가로 매수)
+                    if buy_codes:
+                         cash_holding = False
+                         buy_executed = True
+                         st.write(f"📈 {check_date} : 조건을 만족하는 종목 발견")
+                         st.write(f"📈 선택된 종목: {', '.join([CODE_TO_NAME.get(code, code) for code in buy_codes])}")
+                         st.write(f"📊 조건 만족 개수: {max_conditions}개")
+                         
+                         # 다음 거래일 찾기 (다음 리밸런싱일과 겹치지 않도록)
+                         next_trading_day = None
+                         for trading_date in trading_dates:
+                             if trading_date > check_date and trading_date < cycle_end:
+                                 next_trading_day = trading_date
+                                 break
+                         
+                         if next_trading_day:
+                             # 다음날 시가로 매수
+                             invest_per_stock = portfolio_value / len(buy_codes)
+                             for code in buy_codes:
+                                 try:
+                                     df = pd.read_csv(os.path.join(DATA_FOLDER, f"{code}_features.csv"))
+                                     date_col = find_column(df, ['date', 'Date', '날짜'])
+                                     open_col = find_column(df, ['open', 'Open', '시가'])
+                                     df[date_col] = pd.to_datetime(df[date_col])
+                                     df_buy = df[df[date_col] == pd.to_datetime(next_trading_day)]
+                                     if len(df_buy) > 0:
+                                         open_price = df_buy.iloc[0][open_col]
+                                         shares = invest_per_stock / open_price if open_price > 0 else 0
+                                         buy_summary.append({
+                                             "Code": code,
+                                             "Name": CODE_TO_NAME.get(code, code),
+                                             "Buy Date": next_trading_day,
+                                             "Buy Price": f"{open_price:,.0f}",
+                                             "Shares": f"{shares:.2f}",
+                                             "Investment": f"{invest_per_stock:,.0f}"
+                                         })
+                                         # 포트폴리오에 추가
+                                         held_stocks.append(code)
+                                         stock_positions[code] = {
+                                             'buy_price': open_price,
+                                             'buy_date': next_trading_day,
+                                             'shares': shares
+                                         }
+                                 except Exception as e:
+                                     st.warning(f"Error buying {code}: {e}")
+                         break  # 매수 완료 후 루프 종료
                     else:
-                        # max_stock_count보다 많으면 랜덤 선택
-                        import random
-                        buy_codes = [stock['code'] for stock in random.sample(top_stocks, max_stock_count)]
+                        # 조건을 만족하는 종목이 없으면 다음날로
+                        continue
                 
-                # 5. 현금보유 여부 결정
-                if not buy_codes:
-                    cash_holding = True
-                    st.info(f"💰 {rebalancing_date} : 조건을 만족하는 종목이 없어 현금 보유 (수익률 0%)")
+                # 현금보유 여부 결정
+                if not buy_executed:
+                    st.info(f"💰 {cycle_start} ~ {cycle_end} : 조건을 만족하는 종목이 없어 현금 보유 (수익률 0%)")
                     held_stocks = []
                     stock_positions = {}
+
+                # 현금보유 시 처리
+                if not buy_executed:
                     cycle_return = 0.0
                     equity_curve.append({"Cycle": f"리밸런싱 {i+1}", "Value": portfolio_value})
                     cycle_returns.append(cycle_return)
@@ -674,41 +738,6 @@ if st.button("Run Analysis"):
                         'portfolio_value': portfolio_value
                     })
                     continue
-                else:
-                    cash_holding = False
-                    st.write(f"📈 선택된 종목: {', '.join([CODE_TO_NAME.get(code, code) for code in buy_codes])}")
-                    st.write(f"📊 조건 만족 개수: {max_conditions}개")
-
-                # 매수: cycle_start 시가로 매수
-                buy_summary = []
-                invest_per_stock = portfolio_value / len(buy_codes) if buy_codes else 0
-                for code in buy_codes:
-                    try:
-                        df = pd.read_csv(os.path.join(DATA_FOLDER, f"{code}_features.csv"))
-                        date_col = find_column(df, ['date', 'Date', '날짜'])
-                        open_col = find_column(df, ['open', 'Open', '시가'])
-                        df[date_col] = pd.to_datetime(df[date_col])
-                        df_buy = df[df[date_col] == pd.to_datetime(cycle_start)]
-                        if len(df_buy) > 0:
-                            open_price = df_buy.iloc[0][open_col]
-                            shares = invest_per_stock / open_price if open_price > 0 else 0
-                            buy_summary.append({
-                                "Code": code,
-                                "Name": CODE_TO_NAME.get(code, code),
-                                "Buy Date": cycle_start,
-                                "Buy Price": f"{open_price:,.0f}",
-                                "Shares": f"{shares:.2f}",
-                                "Investment": f"{invest_per_stock:,.0f}"
-                            })
-                            # 포트폴리오에 추가
-                            held_stocks.append(code)
-                            stock_positions[code] = {
-                                'buy_price': open_price,
-                                'buy_date': cycle_start,
-                                'shares': shares
-                            }
-                    except Exception as e:
-                        st.warning(f"Error buying {code}: {e}")
 
                 # 매도 조건 체크 및 매도 실행
                 sell_summary = []
