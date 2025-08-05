@@ -79,16 +79,17 @@ def calculate_evaluation_dates(trading_dates, start_date, end_date, eval_type):
     return evaluation_dates
 
 # 새로운 feature 계산 함수
-def calculate_recent_high_feature(df, evaluation_date):
+def calculate_recent_high_feature(df, evaluation_date, pct=8):
     """
-    재평가일 전날 종가가 최근 5일 중 최저값보다 8% 이상 큰지 확인하는 feature
+    재평가일 전날 종가가 최근 5일 중 최저값보다 지정된 % 이상 큰지 확인하는 feature
     
     Args:
         df: 주식 데이터프레임
         evaluation_date: 재평가일
+        pct: 퍼센트 (기본값: 8)
     
     Returns:
-        recent_high_8pct: True/False (조건 만족 여부)
+        recent_high_Xpct: True/False (조건 만족 여부)
     """
     try:
         date_col = find_column(df, ['date', 'Date', '날짜'])
@@ -126,15 +127,27 @@ def calculate_recent_high_feature(df, evaluation_date):
         # 최근 5일 중 최저값
         min_close = min([day['close'] for day in recent_5_days])
         
-        # 전날 종가가 최저값보다 8% 이상 큰지 확인
-        threshold = min_close * 1.08
-        recent_high_8pct = yesterday_close >= threshold
+        # 전날 종가가 최저값보다 지정된 % 이상 큰지 확인
+        threshold = min_close * (1 + pct/100)
+        recent_high_pct = yesterday_close >= threshold
         
-        return recent_high_8pct
+        return recent_high_pct
         
     except Exception as e:
-        st.warning(f"Error calculating recent_high_8pct feature: {e}")
+        st.warning(f"Error calculating recent_high_{pct}pct feature: {e}")
         return False
+
+def calculate_recent_high_8pct(df, evaluation_date):
+    """8% 버전"""
+    return calculate_recent_high_feature(df, evaluation_date, 8)
+
+def calculate_recent_high_5pct(df, evaluation_date):
+    """5% 버전"""
+    return calculate_recent_high_feature(df, evaluation_date, 5)
+
+def calculate_recent_high_3pct(df, evaluation_date):
+    """3% 버전"""
+    return calculate_recent_high_feature(df, evaluation_date, 3)
 
 # 사용 가능한 feature 목록과 설명
 AVAILABLE_FEATURES = {
@@ -177,7 +190,9 @@ AVAILABLE_FEATURES = {
     "volatility": "변동성",
     
     # 새로운 feature
-    "recent_high_8pct": "재평가일 전날 종가가 최근 5일 중 최저값보다 8% 이상 큰 상황"
+    "recent_high_8pct": "재평가일 전날 종가가 최근 5일 중 최저값보다 8% 이상 큰 상황",
+    "recent_high_5pct": "재평가일 전날 종가가 최근 5일 중 최저값보다 5% 이상 큰 상황",
+    "recent_high_3pct": "재평가일 전날 종가가 최근 5일 중 최저값보다 3% 이상 큰 상황"
 }
 
 
@@ -213,7 +228,7 @@ CODE_TO_NAME = {
 }
 
 
-DATA_FOLDER = os.path.dirname(__file__) 
+DATA_FOLDER = "/home/hanmil/backtest_app" # os.path.dirname(__file__) 
 st.set_page_config(page_title="Stock Screening App", layout="wide")
 st.title("Stock Screening App")
 
@@ -624,14 +639,53 @@ if st.button("Run Analysis"):
                                 
                                 for cond, req in zip(conditions, required_flags):
                                     try:
-                                        if req:  # 필수 조건
-                                            if len(df_until_yesterday.query(cond)) == 0:
-                                                required_satisfied = False
-                                                break
-                                        else:  # 선택 조건
-                                            if len(df_until_yesterday.query(cond)) > 0:
-                                                conditions_satisfied += 1
-                                    except Exception:
+                                        # recent_high_Xpct feature들은 실시간 계산
+                                        if 'recent_high_8pct' in cond:
+                                            # 실시간으로 recent_high_8pct 계산
+                                            recent_high_8pct_value = calculate_recent_high_8pct(df, check_date)
+                                            
+                                            # 조건 평가 (recent_high_8pct == True 또는 recent_high_8pct == recent_high_8pct)
+                                            if 'recent_high_8pct == True' in cond or 'recent_high_8pct == recent_high_8pct' in cond:
+                                                condition_satisfied = recent_high_8pct_value
+                                            else:
+                                                condition_satisfied = not recent_high_8pct_value
+                                        elif 'recent_high_5pct' in cond:
+                                            # 실시간으로 recent_high_5pct 계산
+                                            recent_high_5pct_value = calculate_recent_high_5pct(df, check_date)
+                                            
+                                            # 조건 평가
+                                            if 'recent_high_5pct == True' in cond or 'recent_high_5pct == recent_high_5pct' in cond:
+                                                condition_satisfied = recent_high_5pct_value
+                                            else:
+                                                condition_satisfied = not recent_high_5pct_value
+                                        elif 'recent_high_3pct' in cond:
+                                            # 실시간으로 recent_high_3pct 계산
+                                            recent_high_3pct_value = calculate_recent_high_3pct(df, check_date)
+                                            
+                                            # 조건 평가
+                                            if 'recent_high_3pct == True' in cond or 'recent_high_3pct == recent_high_3pct' in cond:
+                                                condition_satisfied = recent_high_3pct_value
+                                            else:
+                                                condition_satisfied = not recent_high_3pct_value
+                                            
+                                            if req:  # 필수 조건
+                                                if not condition_satisfied:
+                                                    required_satisfied = False
+                                                    break
+                                            else:  # 선택 조건
+                                                if condition_satisfied:
+                                                    conditions_satisfied += 1
+                                        else:
+                                            # 기존 방식으로 조건 평가
+                                            if req:  # 필수 조건
+                                                if len(df_until_yesterday.query(cond)) == 0:
+                                                    required_satisfied = False
+                                                    break
+                                            else:  # 선택 조건
+                                                if len(df_until_yesterday.query(cond)) > 0:
+                                                    conditions_satisfied += 1
+                                    except Exception as e:
+                                        st.warning(f"Error evaluating condition '{cond}' for {code}: {e}")
                                         if req:
                                             required_satisfied = False
                                             break
@@ -683,6 +737,10 @@ if st.button("Run Analysis"):
                          if next_trading_day:
                              # 다음날 시가로 매수
                              invest_per_stock = portfolio_value / len(buy_codes)
+                             
+                             # 디버깅 로그 추가
+                             st.write(f"🔍 매수 디버깅: portfolio_value={portfolio_value:,.0f}, 종목수={len(buy_codes)}, 투자금액={invest_per_stock:,.0f}")
+                             
                              for code in buy_codes:
                                  try:
                                      df = pd.read_csv(os.path.join(DATA_FOLDER, f"{code}_features.csv"))
@@ -693,6 +751,10 @@ if st.button("Run Analysis"):
                                      if len(df_buy) > 0:
                                          open_price = df_buy.iloc[0][open_col]
                                          shares = invest_per_stock / open_price if open_price > 0 else 0
+                                         
+                                         # 디버깅 로그 추가
+                                         st.write(f"🔍 {code} 매수: 시가={open_price:,.0f}, 수량={shares:.2f}, 투자금액={invest_per_stock:,.0f}")
+                                         
                                          buy_summary.append({
                                              "Code": code,
                                              "Name": CODE_TO_NAME.get(code, code),
@@ -708,8 +770,19 @@ if st.button("Run Analysis"):
                                              'buy_date': next_trading_day,
                                              'shares': shares
                                          }
+                                     else:
+                                         st.warning(f"⚠️ {code}: {next_trading_day} 거래일 데이터 없음")
                                  except Exception as e:
                                      st.warning(f"Error buying {code}: {e}")
+                             
+                             if not held_stocks:
+                                 st.error(f"❌ 매수 실패: 모든 종목에서 매수 수량이 0이거나 데이터 오류")
+                             else:
+                                 # 매수 후 포트폴리오 가치 계산
+                                 total_investment = sum(stock_positions[code]['shares'] * stock_positions[code]['buy_price'] for code in held_stocks)
+                                 st.write(f"✅ 매수 완료: 총 투자금액 {total_investment:,.0f}원")
+                         else:
+                             st.warning(f"⚠️ 다음 거래일을 찾을 수 없음: {check_date} 이후 {cycle_end} 이전")
                          break  # 매수 완료 후 루프 종료
                     else:
                         # 조건을 만족하는 종목이 없으면 다음날로
@@ -958,9 +1031,35 @@ if st.button("Run Analysis"):
                     except Exception as e:
                         st.warning(f"Error selling {code}: {e}")
 
-                # 수익률 계산
-                cycle_return = ((total_sell - total_buy) / total_buy) * 100 if total_buy > 0 else 0
-                portfolio_value = total_sell
+                # 수익률 계산 및 포트폴리오 가치 업데이트
+                if total_buy > 0:
+                    cycle_return = ((total_sell - total_buy) / total_buy) * 100
+                    portfolio_value = total_sell
+                else:
+                    # 매수만 하고 매도가 없는 경우, 현재 보유 종목들의 가치 계산
+                    current_portfolio_value = 0
+                    for code in held_stocks:
+                        try:
+                            df = pd.read_csv(os.path.join(DATA_FOLDER, f"{code}_features.csv"))
+                            date_col = find_column(df, ['date', 'Date', '날짜'])
+                            close_col = find_column(df, ['close', 'Close', '종가'])
+                            df[date_col] = pd.to_datetime(df[date_col])
+                            
+                            # 사이클 마지막 거래일의 종가로 계산
+                            last_trading_date = max([d for d in trading_dates if cycle_start <= d < cycle_end])
+                            df_last = df[df[date_col] == pd.to_datetime(last_trading_date)]
+                            
+                            if len(df_last) > 0:
+                                current_close = df_last.iloc[0][close_col]
+                                position = stock_positions.get(code, {})
+                                shares = position.get('shares', 0)
+                                current_portfolio_value += current_close * shares
+                        except Exception as e:
+                            st.warning(f"Error calculating current value for {code}: {e}")
+                    
+                    portfolio_value = current_portfolio_value
+                    cycle_return = 0  # 매도가 없었으므로 수익률 0
+                
                 equity_curve.append({"Cycle": f"리밸런싱 {i+1}", "Value": portfolio_value})
                 cycle_returns.append(cycle_return)
 
@@ -1146,14 +1245,53 @@ if st.button("Run Analysis"):
                                 
                                 for cond, req in zip(conditions, required_flags):
                                     try:
-                                        if req:  # 필수 조건
-                                            if len(df_until_yesterday.query(cond)) == 0:
-                                                required_satisfied = False
-                                                break
-                                        else:  # 선택 조건
-                                            if len(df_until_yesterday.query(cond)) > 0:
-                                                conditions_satisfied += 1
-                                    except Exception:
+                                        # recent_high_Xpct feature들은 실시간 계산
+                                        if 'recent_high_8pct' in cond:
+                                            # 실시간으로 recent_high_8pct 계산
+                                            recent_high_8pct_value = calculate_recent_high_8pct(df, rebalancing_date)
+                                            
+                                            # 조건 평가 (recent_high_8pct == True 또는 recent_high_8pct == recent_high_8pct)
+                                            if 'recent_high_8pct == True' in cond or 'recent_high_8pct == recent_high_8pct' in cond:
+                                                condition_satisfied = recent_high_8pct_value
+                                            else:
+                                                condition_satisfied = not recent_high_8pct_value
+                                        elif 'recent_high_5pct' in cond:
+                                            # 실시간으로 recent_high_5pct 계산
+                                            recent_high_5pct_value = calculate_recent_high_5pct(df, rebalancing_date)
+                                            
+                                            # 조건 평가
+                                            if 'recent_high_5pct == True' in cond or 'recent_high_5pct == recent_high_5pct' in cond:
+                                                condition_satisfied = recent_high_5pct_value
+                                            else:
+                                                condition_satisfied = not recent_high_5pct_value
+                                        elif 'recent_high_3pct' in cond:
+                                            # 실시간으로 recent_high_3pct 계산
+                                            recent_high_3pct_value = calculate_recent_high_3pct(df, rebalancing_date)
+                                            
+                                            # 조건 평가
+                                            if 'recent_high_3pct == True' in cond or 'recent_high_3pct == recent_high_3pct' in cond:
+                                                condition_satisfied = recent_high_3pct_value
+                                            else:
+                                                condition_satisfied = not recent_high_3pct_value
+                                            
+                                            if req:  # 필수 조건
+                                                if not condition_satisfied:
+                                                    required_satisfied = False
+                                                    break
+                                            else:  # 선택 조건
+                                                if condition_satisfied:
+                                                    conditions_satisfied += 1
+                                        else:
+                                            # 기존 방식으로 조건 평가
+                                            if req:  # 필수 조건
+                                                if len(df_until_yesterday.query(cond)) == 0:
+                                                    required_satisfied = False
+                                                    break
+                                            else:  # 선택 조건
+                                                if len(df_until_yesterday.query(cond)) > 0:
+                                                    conditions_satisfied += 1
+                                    except Exception as e:
+                                        st.warning(f"Error evaluating condition '{cond}' for {code}: {e}")
                                         if req:
                                             required_satisfied = False
                                             break
@@ -1254,3 +1392,54 @@ if st.button("Run Analysis"):
 
             st.write("#### Strategy Summary Statistics")
             st.dataframe(summary)
+
+            # ==============================
+            # 내부 디버깅용 분석 로그 (사용자에게는 표시하지 않음)
+            # ==============================
+            
+            # 내부 분석 로그 생성
+            debug_log = []
+            debug_log.append(f"=== 백테스트 디버깅 로그 ===")
+            debug_log.append(f"전략 최종 가치: {int(my_strategy_final):,}원")
+            debug_log.append(f"KODEX 200 최종 가치: {int(kodex_final):,}원")
+            debug_log.append(f"내 전략 총 수익률: {((my_strategy_final/initial_value)-1)*100:.2f}%")
+            debug_log.append(f"KODEX 200 총 수익률: {((kodex_final/initial_value)-1)*100:.2f}%")
+            debug_log.append(f"내 전략 최대 손실폭: {my_strategy_max_dd:.2f}%")
+            debug_log.append(f"사용된 조건: {', '.join(conditions)}")
+            debug_log.append(f"조건 만족 최소 개수: {min_satisfied_conditions}개")
+            debug_log.append(f"최대 보유 종목 수: {max_stock_count}개")
+            
+            # 사이클별 상세 로그
+            debug_log.append(f"\n=== 사이클별 상세 결과 ===")
+            for i, detail in enumerate(cycle_details):
+                debug_log.append(f"사이클 {i+1}: {detail['start_date']} ~ {detail['end_date']}")
+                debug_log.append(f"  - 현금보유: {detail['cash_holding']}")
+                debug_log.append(f"  - 보유 종목: {detail['held_stocks']}")
+                debug_log.append(f"  - 수익률: {detail['cycle_return']:+.2f}%")
+                debug_log.append(f"  - 포트폴리오 가치: {int(detail['portfolio_value']):,}원")
+                if detail['buy_summary']:
+                    debug_log.append(f"  - 매수 내역: {len(detail['buy_summary'])}건")
+                if detail['sell_summary']:
+                    debug_log.append(f"  - 매도 내역: {len(detail['sell_summary'])}건")
+                debug_log.append("")
+            
+            # 문제점 분석
+            debug_log.append(f"=== 문제점 분석 ===")
+            if my_strategy_final == 0:
+                debug_log.append("⚠️ 포트폴리오 가치가 0원 - 매수 로직 또는 조건 문제")
+            if my_strategy_final < kodex_final:
+                debug_log.append("📉 내 전략이 KODEX 200을 하회")
+            if 'recent_high_8pct' in str(conditions):
+                debug_log.append("💡 recent_high_8pct 조건이 너무 엄격할 수 있음")
+            
+            # 내부 로그 저장 (사용자에게는 표시하지 않음)
+            debug_summary = "\n".join(debug_log)
+            
+            # 디버깅용 expander (접혀있음)
+            with st.expander("🔧 내부 디버깅 로그 (개발자용)", expanded=False):
+                st.text_area(
+                    "디버깅 로그",
+                    value=debug_summary,
+                    height=300,
+                    help="내부 디버깅용 로그입니다"
+                )
