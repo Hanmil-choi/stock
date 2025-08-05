@@ -213,7 +213,7 @@ CODE_TO_NAME = {
 }
 
 
-DATA_FOLDER = "/home/hanmil/backtest_app" # os.path.dirname(__file__) 
+DATA_FOLDER = os.path.dirname(__file__) 
 st.set_page_config(page_title="Stock Screening App", layout="wide")
 st.title("Stock Screening App")
 
