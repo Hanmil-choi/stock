@@ -203,7 +203,7 @@ CODE_TO_NAME = {
     "373220": "LG Energy Solution"
 }
 
-DATA_FOLDER = "/home/hanmil/backtest_app"
+DATA_FOLDER = os.path.dirname(__file__) 
 st.set_page_config(page_title="Daily Trading Log App", layout="wide")
 st.title("Daily Trading Log App")
 
@@ -970,4 +970,5 @@ if st.button("Run Daily Trading Log"):
             st.dataframe(
                 df_daily[['date', 'cash', 'portfolio_value', 'held_stocks_count', 'held_stocks_names']].round(0),
                 use_container_width=True
+
             )
